@@ -31,8 +31,8 @@ UKF::UKF(bool use_laser,
   lambda_(3 - n_aug_),
   std_a2_(std_a * std_a),
   std_yawdd2_(std_yawdd * std_yawdd),
-  std_laspx2_(std_laspx * std_laspx),
-  std_laspy2_(std_laspy * std_laspy),
+  laser_noise_(MatrixXd(2, 2)),
+  laser_function_(MatrixXd(2, 5)),
   std_radr2_(std_radr * std_radr),
   std_radphi2_(std_radphi * std_radphi),
   std_radrd2_(std_radrd * std_radrd),
@@ -44,6 +44,10 @@ UKF::UKF(bool use_laser,
   NIS_radar_(0),
   NIS_laser_(0)
 {
+  laser_noise_ << std_laspx * std_laspx, 0,
+                  0, std_laspy * std_laspy;
+  laser_function_ << 1, 0, 0, 0, 0,
+                     0, 1, 0, 0, 0;
   weights_ = VectorXd(n_aug_ * 2 + 1);
   double w1 = lambda_ / (lambda_ + n_aug_);
   weights_(0) = w1;
@@ -139,16 +143,16 @@ void UKF::PredictSigmaPoints(MatrixXd &Xsig_pred,
   double delta_t2 = delta_t * delta_t;
   for (int i = 0; i < Xsig_pred.cols(); ++i)
   {
-    double px = Xsig_aug(0, i);
-    double py = Xsig_aug(1, i);
-    double v = Xsig_aug(2, i);
-    double psi = Xsig_aug(3, i);
-    double psi_dot = Xsig_aug(4, i);
-    double nu_a = Xsig_aug(5, i);   // longitudinal acceleration noise
-    double nu_psi = Xsig_aug(6, i); // yaw acceleration noise
+    const double px = Xsig_aug(0, i);
+    const double py = Xsig_aug(1, i);
+    const double v = Xsig_aug(2, i);
+    const double psi = Xsig_aug(3, i);
+    const double psi_dot = Xsig_aug(4, i);
+    const double nu_a = Xsig_aug(5, i);   // longitudinal acceleration noise
+    const double nu_psi = Xsig_aug(6, i); // yaw acceleration noise
 
-    double cos_psi = cos(psi);
-    double sin_psi = sin(psi);              
+    const double cos_psi = cos(psi);
+    const double sin_psi = sin(psi);              
     VectorXd k1 = VectorXd::Zero(5);
     if (fabs(psi_dot) < EPSILON)
     {
@@ -214,47 +218,18 @@ void UKF::Prediction(double delta_t) {
  * @param {MeasurementPackage} meas_package
  */
 void UKF::UpdateLidar(const MeasurementPackage &meas_package) {
-  int n_z = 2;
-
-  MatrixXd Zsig = MatrixXd(n_z, 2 * n_aug_ + 1);  
-  for (int i = 0; i < Xsig_pred_.cols(); ++i) {
-    double px = Xsig_pred_(0, i);
-    double py = Xsig_pred_(1, i);
-    Zsig.col(i) << px, py;
-  }
-  
-  //calculate mean predicted measurement
-  VectorXd z_pred = VectorXd(n_z);   
-  for (int i = 0; i < z_pred.rows(); ++i) {
-    z_pred(i) = (Zsig.row(i) * weights_).sum();
-  }
-
-  //calculate measurement covariance matrix S
-  MatrixXd S = MatrixXd(n_z, n_z);
-  S << std_laspx2_, 0,
-       0, std_laspy2_;
-  for (int i = 0; i < Zsig.cols(); i++) {
-    VectorXd z_diff = Zsig.col(i) - z_pred;
-    S = S + weights_(i) * z_diff * z_diff.transpose() ;
-  }
-
-  //calculate cross correlation matrix
-  MatrixXd Tc = MatrixXd::Zero(n_x_, z_pred.rows());
-  for (int i = 0; i < Zsig.cols(); i++) {
-    VectorXd z_diff = Zsig.col(i) - z_pred;
-    VectorXd x_diff = Xsig_pred_.col(i) - x_;
-    Tc = Tc + weights_(i) * x_diff * z_diff.transpose() ;
-  }
-
-  //calculate Kalman gain K;
-  MatrixXd K = Tc * S.inverse();
-
-  //update state mean and covariance matrix
+  VectorXd z_pred = laser_function_ * x_;
   VectorXd z_diff = meas_package.raw_measurements_ - z_pred;
-  x_ = x_ + K * z_diff;
-  x_[3] = NormalizeAngle(x_[3]);
-  P_ = P_ - K * S * K.transpose();
+  MatrixXd Ht = laser_function_.transpose();
+  MatrixXd PHt = P_ * Ht;
+  MatrixXd S = laser_function_ * PHt + laser_noise_;
+  MatrixXd Si = S.inverse();
+  MatrixXd K = PHt * Si;
 
+  x_ = x_ + (K * z_diff);
+  long x_size = x_.size();
+  MatrixXd I = MatrixXd::Identity(x_size, x_size);
+  P_ = (I - K * laser_function_) * P_;
   NIS_laser_ = z_diff.transpose() * S.inverse() * z_diff;
 }
 
@@ -269,18 +244,18 @@ void UKF::UpdateRadar(const MeasurementPackage &meas_package) {
   MatrixXd S = MatrixXd(n_z, n_z);
 
   for (int i = 0; i < Xsig_pred_.cols(); ++i) {
-    double px = Xsig_pred_(0, i);
-    double py = Xsig_pred_(1, i);
-    double v = Xsig_pred_(2, i);
-    double psi = Xsig_pred_(3, i);
-    double rho = sqrt(px*px + py*py);
-    double phi = atan2(py, px);
-    if (fabs(rho) < EPSILON)
+    const double px = Xsig_pred_(0, i);
+    const double py = Xsig_pred_(1, i);
+    const double v = Xsig_pred_(2, i);
+    const double psi = Xsig_pred_(3, i);
+    const double rho = sqrt(px*px + py*py);
+    if (fabs(px) < EPSILON && fabs(py) < EPSILON)
     {
-      std::cerr << "UpdateRadar method failed, rho = 0. Skipping...\n";
+      std::cerr << "UpdateRadar method failed, px = 0 and py = 0. Skipping...\n";
       return;
     }
-    double rho_dot = ((px * cos(psi) * v) + (py * sin(psi) * v)) / rho;
+    const double phi = atan2(py, px);
+    const double rho_dot = ((px * cos(psi) * v) + (py * sin(psi) * v)) / std::max(rho, EPSILON);
     Zsig.col(i) << rho, phi, rho_dot;
   }
   

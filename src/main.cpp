@@ -144,7 +144,9 @@ int main(int argc, char* argv[]) {
   out_file << "vy_ground_truth" << "\n";
 
   vector<VectorXd> estimations;
-  vector<VectorXd> ground_truth; 
+  vector<VectorXd> ground_truth;
+  vector<double> nis_laser;
+  vector<double> nis_radar;
   for (size_t k = 0; k < measurement_pack_list.size(); ++k) {
     ukf.ProcessMeasurement(measurement_pack_list[k]);
 
@@ -164,6 +166,7 @@ int main(int argc, char* argv[]) {
       out_file << ukf.NIS_laser() << "\t";
       out_file << measurement_pack_list[k].raw_measurements_(0) << "\t";
       out_file << measurement_pack_list[k].raw_measurements_(1) << "\t";
+      nis_laser.push_back(ukf.NIS_laser());
     }
     else if (measurement_pack_list[k].sensor_type_ == MeasurementPackage::RADAR) {
       out_file << "radar" << "\t";
@@ -172,6 +175,7 @@ int main(int argc, char* argv[]) {
       float phi = measurement_pack_list[k].raw_measurements_(1);
       out_file << ro * cos(phi) << "\t"; // px measurement
       out_file << ro * sin(phi) << "\t"; // py measurement
+      nis_radar.push_back(ukf.NIS_radar());
     }
 
     // output the ground truth
@@ -197,6 +201,14 @@ int main(int argc, char* argv[]) {
 
   // compute the accuracy (RMSE)
   cout << "RMSE" << endl << Tools::CalculateRMSE(estimations, ground_truth) << endl;
+
+  // Output NIS based on Chi-squared distribution
+  int laser_in_range = 0;
+  for (auto n : nis_laser) if (n > 0.103 && n < 5.991) laser_in_range++;
+  cout << "NIS laser in range (expecting ~0.9) = " << float(laser_in_range) / nis_laser.size() << endl;
+  int radar_in_range = 0;
+  for (auto n : nis_radar) if (n > 0.352 && n < 7.815) radar_in_range++;
+  cout << "NIS radar in range (expecting ~0.9) = " << float(radar_in_range) / nis_radar.size() << endl;
   cout << "Done!" << endl;
   return 0;
 }

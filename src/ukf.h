@@ -92,11 +92,11 @@ private:
   ///* Process noise standard deviation yaw acceleration in rad2/s^4
   double std_yawdd2_;
 
-  ///* Laser measurement noise standard deviation position1 in m2
-  double std_laspx2_;
+  ///\* Laser measurement noise
+  MatrixXd laser_noise_;
 
-  ///* Laser measurement noise standard deviation position2 in m2
-  double std_laspy2_;
+  ///\* Laser measurement function
+  MatrixXd laser_function_;
 
   ///* Radar measurement noise standard deviation radius in m2
   double std_radr2_;
